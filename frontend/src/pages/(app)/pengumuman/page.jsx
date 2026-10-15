@@ -1,0 +1,584 @@
+"use client"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Modal } from "react-bootstrap"
+import Button from "components/Button"
+import EofficeStatusBadge from "components/EofficeStatusBadge"
+import { api_services } from "hooks/api_services"
+import { formatDateApp } from "pages/Utils"
+
+const emptyForm = {
+    judul: "",
+    isi: "",
+    kategori: "informasi",
+    target_role: "semua",
+    tanggal_publish: "",
+    lampiran: "",
+    status: "draft",
+}
+
+const emptyFilters = {
+    keyword: "",
+    kategori: "",
+    status: "",
+    target_role: "",
+    tanggal_dari: "",
+    tanggal_sampai: "",
+}
+
+const normalizeList = response => {
+    if (Array.isArray(response?.data)) return response.data
+    if (Array.isArray(response?.data?.data)) return response.data.data
+    if (Array.isArray(response?.result)) return response.result
+    if (Array.isArray(response)) return response
+    return []
+}
+
+const getId = item => item?.id_pengumuman || item?.id || item?.value
+const getAnnouncementExcerpt = value => {
+    if (!value) return "-"
+    const parsed = new DOMParser().parseFromString(String(value), "text/html")
+    let text = parsed.body.textContent || ""
+    // Some older records contain HTML that was entity-escaped before storage.
+    if (/<\/?[a-z][^>]*>/i.test(text)) {
+        text = new DOMParser().parseFromString(text, "text/html").body.textContent || text
+    }
+    return text.replace(/\s+/g, " ").trim() || "-"
+}
+
+const kategoriOptions = [
+    { value: "semua", label: "Semua", icon: "apps", color: "#334155" },
+    { value: "informasi", label: "Informasi", icon: "info", color: "#118b9b" },
+    { value: "penting", label: "Penting", icon: "priority_high", color: "#dc2626" },
+    { value: "acara", label: "Acara", icon: "event", color: "#7c3aed" },
+    { value: "pengumuman_layanan", label: "Layanan", icon: "support_agent", color: "#eab308" },
+    { value: "edukasi", label: "Edukasi", icon: "school", color: "#16a34a" },
+]
+
+const roleOptions = [
+    { value: 'pegawai', label: 'Pegawai' },
+    { value: 'pimpinan', label: 'Pimpinan' },
+    { value: 'admin_sistem', label: 'Admin Sistem' },
+    { value: 'admin_konten', label: 'Admin Konten' },
+]
+
+const getKategori = value => kategoriOptions.find(k => k.value === value) || kategoriOptions[0]
+
+const formatDateShort = value => {
+    if (!value) return "-"
+    return formatDateApp(value, "DD MMM YYYY")
+}
+
+const cardActionButtonStyle = {
+    minWidth: 58,
+    height: 30,
+    padding: "0 7px",
+    justifyContent: "center",
+    gap: 4,
+    fontSize: 12,
+}
+
+const RichTextEditor = ({ value, onChange }) => {
+    const editorRef = useRef(null)
+    const [formatMenu, setFormatMenu] = useState(false)
+    const [activeMenu, setActiveMenu] = useState(null)
+
+    useEffect(() => {
+        if (editorRef.current && editorRef.current.innerHTML !== (value || "")) {
+            editorRef.current.innerHTML = value || ""
+        }
+    }, [value])
+
+    const format = command => {
+        editorRef.current?.focus()
+        document.execCommand(command, false)
+        onChange(editorRef.current?.innerHTML || "")
+    }
+
+    const insertLink = () => {
+        const url = window.prompt("Masukkan URL tautan")
+        if (url) {
+            editorRef.current?.focus()
+            document.execCommand("createLink", false, url)
+            onChange(editorRef.current?.innerHTML || "")
+        }
+    }
+
+    const changeBlock = value => {
+        editorRef.current?.focus()
+        const command = value.startsWith("justify") ? value : "formatBlock"
+        document.execCommand(command, false, value.startsWith("justify") ? undefined : value)
+        onChange(editorRef.current?.innerHTML || "")
+        setFormatMenu(false)
+    }
+
+    const insertImage = () => {
+        const url = window.prompt("Masukkan URL gambar")
+        if (url) {
+            editorRef.current?.focus()
+            document.execCommand("insertImage", false, url)
+            onChange(editorRef.current?.innerHTML || "")
+        }
+    }
+
+    const handleInput = event => onChange(event.currentTarget.innerHTML)
+    const toggleList = type => {
+        editorRef.current?.focus()
+        if (!editorRef.current?.innerText.trim()) {
+            editorRef.current.innerHTML = type === "ol" ? "<ol><li><br></li></ol>" : "<ul><li><br></li></ul>"
+        } else {
+            document.execCommand(type === "ol" ? "insertOrderedList" : "insertUnorderedList", false)
+        }
+        onChange(editorRef.current?.innerHTML || "")
+    }
+
+    const menuItems = { File: [['Simpan', 'save']], Edit: [['Urungkan', 'undo'], ['Ulangi', 'redo'], ['Pilih semua', 'selectAll']], View: [['Tampilan fokus', 'fullscreen']], Insert: [['Sisipkan tautan', 'link'], ['Sisipkan gambar', 'image']], Format: [['Hapus format', 'removeFormat']], Tools: [['Hitung karakter', 'count']], Table: [['Sisipkan tabel', 'table']], Help: [['Panduan editor', 'help']] }
+    const runMenu = command => {
+        setActiveMenu(null)
+        if (command === 'link') return insertLink()
+        if (command === 'image') return insertImage()
+        if (command === 'count') return window.alert(`Jumlah karakter: ${editorRef.current?.innerText.length || 0}`)
+        if (command === 'help') return window.alert('Gunakan toolbar untuk memformat isi pengumuman.')
+        if (command === 'save') return window.alert('Gunakan tombol Simpan Pengumuman untuk menyimpan.')
+        if (command === 'table') {
+            editorRef.current?.focus()
+            document.execCommand('insertHTML', false, '<table border="1" style="border-collapse:collapse;width:100%"><tbody><tr><td>&nbsp;</td><td>&nbsp;</td></tr><tr><td>&nbsp;</td><td>&nbsp;</td></tr></tbody></table><p><br></p>')
+            return onChange(editorRef.current?.innerHTML || '')
+        }
+        if (command === 'fullscreen') return editorRef.current?.requestFullscreen?.()
+        format(command)
+    }
+
+    return (
+        <div className="border rounded" style={{ overflow: "hidden" }}>
+            <div className="d-flex align-items-center gap-1 px-3 py-1 bg-white border-bottom" role="menubar">
+                {Object.keys(menuItems).map(menu => <div key={menu} className="position-relative"><button type="button" className="btn btn-sm btn-link text-dark text-decoration-none px-2" onClick={() => setActiveMenu(activeMenu === menu ? null : menu)}>{menu}</button>{activeMenu === menu && <div className="position-absolute bg-white border rounded shadow-sm" style={{ zIndex: 30, top: '100%', left: 0, minWidth: 150 }}>{menuItems[menu].map(([label, command]) => <button key={command} type="button" className="btn btn-sm btn-link text-dark text-left w-100 d-block px-3 py-2" onClick={() => runMenu(command)}>{label}</button>)}</div>}</div>)}
+            </div>
+            <div className="d-flex flex-wrap align-items-center gap-1 px-2 py-2 bg-light border-bottom" role="toolbar" aria-label="Format isi pengumuman">
+                <button type="button" className="btn btn-sm btn-link text-secondary" onClick={() => format('undo')} aria-label="Urungkan"><span className="material-icons">undo</span></button>
+                <button type="button" className="btn btn-sm btn-link text-secondary" onClick={() => format('redo')} aria-label="Ulangi"><span className="material-icons">redo</span></button>
+                <div className="position-relative ml-2">
+                    <button type="button" className="btn btn-sm bg-white border d-flex align-items-center justify-content-between" style={{ width: 130 }} onClick={() => setFormatMenu(open => !open)} aria-expanded={formatMenu}>Bold <span className="material-icons" style={{ fontSize: 16 }}>expand_more</span></button>
+                    {formatMenu && <div className="position-absolute bg-white border rounded shadow-sm" style={{ zIndex: 20, top: "100%", left: 0, width: 140, marginTop: 3 }}>
+                        {[['Headings', [['h1', 'Heading 1'], ['h2', 'Heading 2'], ['h3', 'Heading 3']]], ['Inline', [['bold', 'Bold'], ['italic', 'Italic'], ['underline', 'Underline']]], ['Blocks', [['p', 'Paragraph'], ['blockquote', 'Quote']]], ['Align', [['justifyLeft', 'Left'], ['justifyCenter', 'Center'], ['justifyRight', 'Right'], ['justifyFull', 'Justify']]]].map(([group, items]) => <div key={group} className="border-bottom last:border-0">
+                            <div className="d-flex align-items-center justify-content-between px-3 py-2 text-secondary" style={{ fontSize: 13 }}>{group}<span className="material-icons" style={{ fontSize: 16 }}>chevron_right</span></div>
+                            <div className="px-2 pb-1">{items.map(([command, label]) => <button key={command} type="button" className="btn btn-sm btn-link d-block text-left text-dark w-100 py-1" onClick={() => ['bold', 'italic', 'underline'].includes(command) ? format(command) : changeBlock(command)}>{label}</button>)}</div>
+                        </div>)}
+                    </div>}
+                </div>
+                {[['bold', 'B'], ['italic', 'I'], ['underline', 'U'], ['strikeThrough', 'S']].map(([command, label]) => (
+                    <button key={command} type="button" className="btn btn-sm btn-outline-secondary" onMouseDown={event => event.preventDefault()} onClick={() => format(command)} aria-label={command}>
+                        <span style={{ fontWeight: command === 'bold' ? 700 : 400, fontStyle: command === 'italic' ? 'italic' : 'normal', textDecoration: command === 'underline' ? 'underline' : command === 'strikeThrough' ? 'line-through' : 'none' }}>{label}</span>
+                    </button>
+                ))}
+                {['justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'].map((command, index) => <button key={command} type="button" className="btn btn-sm btn-link text-dark" onMouseDown={event => event.preventDefault()} onClick={() => format(command)} aria-label={command}><span className="material-icons" style={{ fontSize: 18 }}>{['format_align_left', 'format_align_center', 'format_align_right', 'format_align_justify'][index]}</span></button>)}
+                <button type="button" className="btn btn-sm btn-link text-dark" onMouseDown={event => event.preventDefault()} onClick={() => toggleList('ul')} aria-label="Daftar berpoin"><span className="material-icons" style={{ fontSize: 18 }}>format_list_bulleted</span></button>
+                <button type="button" className="btn btn-sm btn-link text-dark" onMouseDown={event => event.preventDefault()} onClick={() => toggleList('ol')} aria-label="Daftar bernomor"><span className="material-icons" style={{ fontSize: 18 }}>format_list_numbered</span></button>
+                <button type="button" className="btn btn-sm btn-link text-dark" onClick={() => format('outdent')} aria-label="Kurangi indent">☷</button>
+                <button type="button" className="btn btn-sm btn-link text-dark" onClick={() => format('indent')} aria-label="Tambah indent">☷</button>
+                <button type="button" className="btn btn-sm btn-link text-dark" onMouseDown={event => event.preventDefault()} onClick={insertLink} aria-label="Sisipkan tautan"><span className="material-icons" style={{ fontSize: 18 }}>link</span></button>
+                <button type="button" className="btn btn-sm btn-link text-dark" onMouseDown={event => event.preventDefault()} onClick={insertImage} aria-label="Sisipkan gambar"><span className="material-icons" style={{ fontSize: 18 }}>image</span></button>
+            </div>
+            <div className="position-relative">
+                {!value && <span className="text-muted position-absolute p-3" style={{ pointerEvents: "none" }}>Tulis isi pengumuman...</span>}
+                <div ref={editorRef} contentEditable role="textbox" aria-multiline="true" onInput={handleInput} className="p-3" style={{ minHeight: 170, outline: "none", whiteSpace: "pre-wrap" }} />
+            </div>
+        </div>
+    )
+}
+
+const Pengumuman = () => {
+    const [list, setList] = useState([])
+    const [isLoading, setIsLoading] = useState(false)
+    const [showModal, setShowModal] = useState(false)
+    const [selectedId, setSelectedId] = useState(null)
+    const [form, setForm] = useState(emptyForm)
+    const [previewItem, setPreviewItem] = useState(null)
+    const [showPreview, setShowPreview] = useState(false)
+    const [filters, setFilters] = useState(emptyFilters)
+    const [draftFilters, setDraftFilters] = useState(emptyFilters)
+    const [pagination, setPagination] = useState({ page: 1, pagesize: 12, total_records: 0, total_page: 1 })
+    const [loadError, setLoadError] = useState("")
+    const [activeKategori, setActiveKategori] = useState("semua")
+
+
+    const service = useMemo(() => api_services({ api_path: "/pengumuman" }), [])
+
+    const loadData = async (activeFilters = filters, page = pagination.page) => {
+        setIsLoading(true)
+        setLoadError("")
+        const activeFilterValues = Object.fromEntries(
+            Object.entries(activeFilters).filter(([, value]) => value !== "" && value !== null && value !== undefined)
+        )
+        const response = await service.getapi_services({
+            filter: {
+                paginate: { page, pagesize: pagination.pagesize },
+                filter: activeFilterValues,
+                order: "published_at desc, id_pengumuman desc",
+            },
+        })
+        setIsLoading(false)
+        if (response?.error || response?.code || response?.success === false) {
+            setList([])
+            setLoadError(response?.message || "Data pengumuman tidak dapat dimuat.")
+            return
+        }
+        setList(normalizeList(response))
+        setPagination(current => ({
+            ...current,
+            page: response?.page || page,
+            total_records: response?.total_records || 0,
+            total_page: response?.total_page || 1,
+        }))
+    }
+
+    useEffect(() => { loadData() }, [filters, pagination.page])
+
+    const getTargetRoleLabel = value => {
+        if (value === 'semua') return 'Semua'
+        const legacyLabels = {
+            admin_sistem: 'Admin Sistem',
+            admin_konten: 'Admin Konten',
+            pegawai: 'Pegawai',
+        }
+        return roleOptions.find(option => option.value === value)?.label || legacyLabels[value] || value || 'Semua'
+    }
+
+    const openForm = item => {
+        setSelectedId(getId(item))
+        setForm({
+            ...emptyForm,
+            ...item,
+            tanggal_publish: item?.tanggal_publish ? String(item.tanggal_publish).slice(0, 10) : '',
+        })
+        setShowModal(true)
+    }
+
+    const saveData = async event => {
+        event?.preventDefault()
+        const body = { ...form }
+        const response = selectedId
+            ? await service.putapi_services({ id: selectedId, ...body })
+            : await service.postapi_services(body)
+        if (response?.success === false || response?.error || response?.code || !response?.data) return
+        setShowModal(false)
+        setSelectedId(null)
+        setForm(emptyForm)
+        loadData()
+    }
+
+    const publishData = async item => {
+        const id = getId(item)
+        if (!id) return
+        const nextStatus = item?.status === "publish" || item?.status === "published" ? "draft" : "publish"
+        const response = await service.putapi_services({
+            id, ...item, status: nextStatus,
+            tanggal_publish: nextStatus === "publish" ? (item?.tanggal_publish || new Date().toISOString().slice(0, 10)) : item?.tanggal_publish,
+        })
+        if (response?.error || response?.code) return
+        loadData()
+    }
+
+    const deleteData = async item => {
+        const id = getId(item)
+        if (!id) return
+        const response = await service.deleteapi_services({ id })
+        if (response?.error || response?.code) return
+        loadData()
+    }
+
+    const applyFilters = event => {
+        event?.preventDefault()
+        setFilters(draftFilters)
+        setPagination(current => ({ ...current, page: 1 }))
+    }
+
+    const resetFilters = () => {
+        setDraftFilters(emptyFilters)
+        setFilters(emptyFilters)
+        setPagination(current => ({ ...current, page: 1 }))
+    }
+
+    const changePage = nextPage => {
+        if (nextPage < 1 || nextPage > pagination.total_page || nextPage === pagination.page) return
+        setPagination(current => ({ ...current, page: nextPage }))
+    }
+
+    const handleKategoriChange = kategori => {
+        setActiveKategori(kategori)
+        const kategoriFilter = kategori === "semua" ? "" : kategori
+        setFilters(current => ({ ...current, kategori: kategoriFilter }))
+        setDraftFilters(current => ({ ...current, kategori: kategoriFilter }))
+        setPagination(current => ({ ...current, page: 1 }))
+    }
+
+    const visibleList = activeKategori === "semua"
+        ? list
+        : list.filter(item => item?.kategori === activeKategori)
+    const publishedList = visibleList.filter(item => item?.status === "publish" || item?.status === "published")
+    const draftList = visibleList.filter(item => item?.status === "draft")
+
+    return (
+        <>
+            <div className="container pl-4 pr-4">
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <div className="d-flex flex-wrap gap-2" role="tablist" aria-label="Filter kategori pengumuman">
+                        {kategoriOptions.map(kategori => {
+                            const isActive = activeKategori === kategori.value
+                            return <button
+                                key={kategori.value}
+                                type="button"
+                                role="tab"
+                                aria-selected={isActive}
+                                onClick={() => handleKategoriChange(kategori.value)}
+                                className={`btn btn-sm d-inline-flex align-items-center gap-1 ${isActive ? "text-white shadow-sm" : "bg-white border text-slate-600"}`}
+                                style={isActive ? { backgroundColor: kategori.color, borderColor: kategori.color, fontWeight: 600 } : { borderColor: "#cbd5e1" }}
+                            >
+                                <span className="material-icons" style={{ fontSize: 16 }}>{kategori.icon}</span>
+                                {kategori.label}
+                            </button>
+                        })}
+                    </div>
+                    <Button className="btn-default-app btn-info" onClick={() => openForm({})}>
+                        <span className="material-icons mr-1" style={{ fontSize: 16 }}>campaign</span>
+                        Tambah Pengumuman
+                    </Button>
+                </div>
+
+                {/* Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    {[
+                        { label: "Total Pengumuman", value: list.length, icon: "campaign", color: "teal" },
+                        { label: "Diterbitkan", value: publishedList.length, icon: "publish", color: "emerald" },
+                        { label: "Draf", value: draftList.length, icon: "edit_note", color: "slate" },
+                        { label: "Penting", value: list.filter(l => l?.kategori === "penting").length, icon: "priority_high", color: "red" },
+                    ].map(item => (
+                        <div key={item.label} className="bg-white rounded-xl shadow-sm border border-slate-200/80 p-4 flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                                item.color === "teal" ? "bg-teal-50" :
+                                item.color === "emerald" ? "bg-emerald-50" :
+                                item.color === "slate" ? "bg-slate-100" : "bg-red-50"
+                            }`}>
+                                <span className={`material-icons text-lg ${
+                                    item.color === "teal" ? "text-teal-600" :
+                                    item.color === "emerald" ? "text-emerald-600" :
+                                    item.color === "slate" ? "text-slate-500" : "text-red-500"
+                                }`}>{item.icon}</span>
+                            </div>
+                            <div>
+                                <div className="text-xl font-bold text-slate-900">{item.value}</div>
+                                <div className="text-xs text-slate-500">{item.label}</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Pengumuman List */}
+                <div className="row">
+                    {visibleList.map((item, index) => {
+                        const kat = getKategori(item?.kategori)
+                        const isPublished = item?.status === "publish" || item?.status === "published"
+                        return (
+                            <div className="col-lg-6 mb-3" key={getId(item) || index}>
+                                <div className={`bg-white rounded-xl shadow-sm border ${isPublished ? "border-teal-200" : "border-slate-200/80"} h-100`}>
+                                    {/* Card Header */}
+                                    <div className="p-4 pb-3">
+                                        <div className="d-flex align-items-start justify-content-between mb-2">
+                                            <div className="d-flex align-items-center gap-2">
+                                                <div className="d-flex align-items-center justify-content-center rounded-lg p-1.5" style={{ background: `${kat.color}15` }}>
+                                                    <span className="material-icons" style={{ fontSize: 18, color: kat.color }}>{kat.icon}</span>
+                                                </div>
+                                                <div>
+                                                    <div className="text-xs font-semibold" style={{ color: kat.color }}>{kat.label}</div>
+                                                </div>
+                                            </div>
+                                            <EofficeStatusBadge value={item?.status || "draft"} />
+                                        </div>
+                                        <h5 className="font-bold text-slate-900 mb-1">{item?.judul || "-"}</h5>
+                                        <div className="text-xs text-slate-500">
+                                            <span className="material-icons" style={{ fontSize: 13, verticalAlign: "middle" }}>group</span>
+                                            {" "}{getTargetRoleLabel(item?.target_role)}
+                                            {item?.tanggal_publish ? ` • ${formatDateShort(item.tanggal_publish)}` : ""}
+                                        </div>
+                                    </div>
+
+                                    {/* Card Body */}
+                                    <div className="px-4 pb-3">
+                                        <div className="text-sm mb-3" style={{ color: "#111827", fontSize: 15, fontWeight: 500, lineHeight: 1.7, maxHeight: 80, overflow: "hidden", position: "relative" }}>
+                                            {getAnnouncementExcerpt(item?.isi)}
+                                            <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 24, background: "linear-gradient(transparent, white)" }}></div>
+                                        </div>
+
+                                        {/* Lampiran */}
+                                        {item?.lampiran && (
+                                            <div className="mb-3 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                                <div className="text-xs text-slate-500 font-semibold mb-1">
+                                                    <span className="material-icons" style={{ fontSize: 13, verticalAlign: "middle" }}>attach_file</span>
+                                                    {" "}Lampiran
+                                                </div>
+                                                <div className="text-xs text-teal-600">{item.lampiran}</div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Card Footer */}
+                                    <div className="px-4 pb-4 pt-2 d-flex justify-content-between align-items-center">
+                                        <div className="d-flex" style={{ gap: 6 }}>
+                                            <Button className="btn-default-app btn-light btn-sm" style={cardActionButtonStyle} onClick={() => { setPreviewItem(item); setShowPreview(true) }}>
+                                                <span className="material-icons" style={{ fontSize: 16 }}>visibility</span>
+                                                Lihat
+                                            </Button>
+                                            <Button className="btn-default-app btn-warning btn-sm" style={cardActionButtonStyle} onClick={() => openForm(item)}>
+                                                <span className="material-icons" style={{ fontSize: 16 }}>edit</span>
+                                                Edit
+                                            </Button>
+                                            <Button className="btn-default-app btn-danger btn-sm" style={cardActionButtonStyle} onClick={() => {
+                                                if (window.confirm("Anda yakin menghapus pengumuman ini?")) deleteData(item)
+                                            }}>
+                                                <span className="material-icons" style={{ fontSize: 16 }}>delete</span>
+                                                Hapus
+                                            </Button>
+                                        </div>
+                                        <Button
+                                            className={`btn-default-app btn-sm pengumuman-publish-btn ${isPublished ? "btn-warning" : "btn-success"}`}
+                                            style={cardActionButtonStyle}
+                                            onClick={() => publishData(item)}
+                                        >
+                                            <span className="material-icons" style={{ fontSize: 14 }}>{isPublished ? "unpublished" : "publish"}</span>
+                                            {isPublished ? "Batalkan Terbit" : "Terbitkan"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    })}
+                    {!visibleList.length ? (
+                        <div className="col-12">
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200/80 p-8 text-center text-slate-400">
+                                <span className="material-icons text-5xl mb-3">campaign</span>
+                                <h3 className="text-lg font-semibold text-slate-600 mb-1">Belum Ada Pengumuman</h3>
+                                <p className="text-sm mb-3">{loadError || "Ubah filter atau klik tombol di atas untuk membuat pengumuman baru."}</p>
+                            </div>
+                        </div>
+                    ) : null}
+                </div>
+
+                <div className="d-flex justify-content-between align-items-center mt-2 mb-4">
+                    <div className="text-xs text-slate-500">Menampilkan {visibleList.length} dari {pagination.total_records} pengumuman</div>
+                    <div className="d-flex align-items-center" style={{ gap: 8 }}>
+                        <Button className="btn-default-app btn-light btn-sm" type="button" disabled={pagination.page <= 1 || isLoading} onClick={() => changePage(pagination.page - 1)}>Sebelumnya</Button>
+                        <span className="text-xs text-slate-600">Halaman {pagination.page} / {pagination.total_page}</span>
+                        <Button className="btn-default-app btn-light btn-sm" type="button" disabled={pagination.page >= pagination.total_page || isLoading} onClick={() => changePage(pagination.page + 1)}>Berikutnya</Button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Form Modal */}
+            <Modal show={showModal} onHide={() => setShowModal(false)} backdrop="static" keyboard={false} size="lg" centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>{selectedId ? "Edit Pengumuman" : "Tambah Pengumuman"}</Modal.Title>
+                </Modal.Header>
+                <form onSubmit={saveData}>
+                    <Modal.Body>
+                        <div className="row g-3">
+                            <div className="col-md-8">
+                                <label className="font-semibold">Judul Pengumuman <span className="text-danger">*</span></label>
+                                <input className="form-control" value={form.judul || ""} onChange={e => setForm({ ...form, judul: e.target.value })} required />
+                            </div>
+                            <div className="col-md-4">
+                                <label className="font-semibold">Kategori</label>
+                                <select className="form-control" value={form.kategori || "informasi"} onChange={e => setForm({ ...form, kategori: e.target.value })}>
+                                    {kategoriOptions.filter(k => k.value !== "semua").map(k => (
+                                        <option key={k.value} value={k.value}>{k.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="col-md-4">
+                                <label className="font-semibold">Target Role</label>
+                                <select className="form-control" value={form.target_role || "semua"} onChange={e => setForm({ ...form, target_role: e.target.value })}>
+                                    <option value="semua">Semua</option>
+                                    {form.target_role && form.target_role !== 'semua' && !roleOptions.some(option => option.value === form.target_role)
+                                        ? <option value={form.target_role}>{getTargetRoleLabel(form.target_role)}</option>
+                                        : null}
+                                    {roleOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                </select>
+                            </div>
+                            <div className="col-md-4">
+                                <label className="font-semibold">Tanggal Publish</label>
+                                <input className="form-control" type="date" value={form.tanggal_publish || ""} onChange={e => setForm({ ...form, tanggal_publish: e.target.value })} required={form.status === 'publish'} />
+                                <small className="text-muted">Pengumuman mulai tampil pada tanggal ini.</small>
+                            </div>
+                            <div className="col-12">
+                                <label className="font-semibold">Isi Pengumuman <span className="text-danger">*</span></label>
+                                <RichTextEditor value={form.isi || ""} onChange={isi => setForm(current => ({ ...current, isi }))} />
+                                <input type="text" value={form.isi || ""} onChange={() => {}} required aria-hidden="true" tabIndex={-1} style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 1, height: 1 }} />
+                            </div>
+                            <div className="col-12">
+                                <label className="font-semibold">Lampiran</label>
+                                <input className="form-control" placeholder="URL atau nama file lampiran" value={form.lampiran || ""} onChange={e => setForm({ ...form, lampiran: e.target.value })} />
+                            </div>
+                            <div className="col-md-4">
+                                <label className="font-semibold">Status</label>
+                                <select className="form-control" value={form.status || "draft"} onChange={e => setForm({ ...form, status: e.target.value })}>
+                                    <option value="draft">Draf</option>
+                                    <option value="publish">Publish</option>
+                                </select>
+                            </div>
+                        </div>
+                    </Modal.Body>
+                    <Modal.Footer>
+                        <Button className="btn-default-app btn-light" type="button" onClick={() => setShowModal(false)}>Batal</Button>
+                        <Button className="btn-default-app btn-info" type="submit">Simpan Pengumuman</Button>
+                    </Modal.Footer>
+                </form>
+            </Modal>
+
+            {/* Preview Modal */}
+            <Modal show={showPreview} onHide={() => setShowPreview(false)} backdrop="static" keyboard={false} size="lg" centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>Preview Pengumuman</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    {previewItem && (
+                        <div className="p-4">
+                            <div className="d-flex align-items-center gap-3 mb-4">
+                                <div className="d-flex align-items-center justify-content-center rounded-lg p-2" style={{ background: `${getKategori(previewItem?.kategori).color}15` }}>
+                                    <span className="material-icons text-2xl" style={{ color: getKategori(previewItem?.kategori).color }}>
+                                        {getKategori(previewItem?.kategori).icon}
+                                    </span>
+                                </div>
+                                <div>
+                                    <h3 className="font-bold text-lg text-slate-900 mb-0">{previewItem?.judul || "-"}</h3>
+                                    <div className="text-sm text-slate-500">
+                                        {getTargetRoleLabel(previewItem?.target_role)}
+                                        {previewItem?.tanggal_publish ? ` • ${formatDateShort(previewItem.tanggal_publish)}` : ""}
+                                    </div>
+                                </div>
+                            </div>
+                            <hr />
+                            <div className="text-slate-700 mt-3" style={{ lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: previewItem?.isi || "-" }} />
+                            {previewItem?.lampiran && (
+                                <div className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                                    <div className="text-xs font-semibold text-slate-500 mb-1">
+                                        <span className="material-icons" style={{ fontSize: 14, verticalAlign: "middle" }}>attach_file</span>
+                                        {" "}Lampiran
+                                    </div>
+                                    <div className="text-sm text-teal-600">{previewItem.lampiran}</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button className="btn-default-app btn-light" onClick={() => setShowPreview(false)}>Tutup</Button>
+                    <Button className="btn-default-app btn-info" onClick={() => { setShowPreview(false); openForm(previewItem) }}>
+                        <span className="material-icons" style={{ fontSize: 16 }}>edit</span>
+                        Edit
+                    </Button>
+                </Modal.Footer>
+            </Modal>
+        </>
+    )
+}
+
+export default Pengumuman
